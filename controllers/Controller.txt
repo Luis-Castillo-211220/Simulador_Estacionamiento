@@ -1,0 +1,145 @@
+package controllers
+
+import (
+	// "Simulator/controllers"
+	"Simulator/models"
+	"fmt"
+	"math/rand"
+
+	// "math/rand"
+	"sync"
+	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/storage"
+)
+
+var (
+	entranceSemaphore = &sync.Mutex{}
+	generarCarros     = true // Variable para controlar la generación de carros
+)
+
+
+func GenerarEspaciosEstacionamiento(filas, columnas, espacioX, espacioY int) []fyne.Position {
+	espaciosEstacionamiento := make([]fyne.Position, 0, filas*columnas)
+
+	for fila := 0; fila < filas; fila++ {
+		for columna := 0; columna < columnas; columna++ {
+			posX := float32(100 + espacioX*columna)
+			posY := float32(100 + espacioY*fila)
+			espaciosEstacionamiento = append(espaciosEstacionamiento, fyne.NewPos(posX, posY))
+		}
+	}
+
+	return espaciosEstacionamiento
+}
+
+func generarCarro(estacionamiento *models.Estacionamiento, espaciosEstacionamiento []fyne.Position, generatedCars int) {
+    select {
+    case estacionamiento.SlotsEstacionamiento <- true:
+        carroImage := canvas.NewImageFromURI(storage.NewFileURI("./assets/carro1.png"))
+        carroImage.Resize(fyne.NewSize(100, 100))
+        carroImage.Move(espaciosEstacionamiento[generatedCars%len(espaciosEstacionamiento)])
+
+        nuevoCarro := models.CreateCarro(estacionamiento, carroImage)
+        nuevoCarro.I = generatedCars + 1
+
+        estacionamiento.PintarCarro <- carroImage
+        // go controllers.RunCarro(NuevoCarro)
+		go RunCarro(nuevoCarro)
+
+        // tiempoEsperar := rand.Intn(5000-1000+1) + 1000
+        time.Sleep(4* time.Second)
+    default:
+        <-estacionamiento.VehiculosBloqueados
+    }
+}
+
+
+func GenerateCars(n int, estacionamiento *models.Estacionamiento) {
+	generatedCars := 0
+	espaciosEstacionamiento := GenerarEspaciosEstacionamiento(2, 10, 100, 100)
+
+	for i := 0; i < n; i++ {
+		generarCarro(estacionamiento, espaciosEstacionamiento, generatedCars)
+		generatedCars++
+	}
+}
+
+
+func () RunCarro(c *Carro) {
+	for {
+		c.Estacionamiento.M.Lock()
+		// Verificar si hay espacio disponible antes de intentar estacionar
+		if c.Estacionamiento.EspaciosDisponibles > 0 {
+			c.estacionar()
+			time.Sleep(time.Duration(rand.Intn(4)) * time.Second)
+			c.abandonar()
+		} else {
+			// Esperar si no hay espacio disponible
+			c.esperarEspacioDisponible()
+		}
+	}
+}
+
+func () estacionar(c *Carro) {
+	c.Estacionamiento.M.Lock()
+	defer c.Estacionamiento.M.Unlock()
+	for len(c.Estacionamiento.SlotsEstacionamiento) == 0 {
+		c.Estacionamiento.Cond.Wait()
+	}
+
+	slot := <-c.Estacionamiento.SlotsEstacionamiento
+
+	if slot {
+		x := float32(rand.Intn(650-150+1) + 150)
+		y := float32(rand.Intn(300-50+1) + 50)
+		c.Skin.Move(fyne.NewPos(x, y))
+		fmt.Println("Carro", c.I, "Entra al estacionamiento")
+
+	}
+
+	c.Estacionamiento.EspaciosOcupados++
+	c.Estacionamiento.EspaciosDisponibles--
+
+	fmt.Println("Espacios Ocupados: ", c.Estacionamiento.EspaciosOcupados)
+	fmt.Println("Espacios Disponibles: ", c.Estacionamiento.EspaciosDisponibles)
+
+	// if c.Estacionamiento.EspaciosDisponibles == 0 {
+	// 	// Enviar señal para detener la generación de carros
+	// 	c.Estacionamiento.DetenerGeneracion <- struct{}{}
+	// }
+
+	// c.Estacionamiento.M.Unlock()
+}
+
+func () abandonar(c *Carro) {
+	c.Estacionamiento.M.Lock()
+	defer c.Estacionamiento.M.Unlock()
+
+	c.Skin.Move(fyne.NewPos(0, 0))
+	fmt.Println("Carro", c.I, "Abandona el estacionamiento")
+	c.Estacionamiento.CarroAbandona <- struct{}{}
+	c.Estacionamiento.SlotsEstacionamiento <- true // Enviar true para indicar que el slot está disponible
+
+	// Notificar el cambio en la condición después de haber liberado el candado
+	c.Estacionamiento.Cond.Signal()
+
+	c.Estacionamiento.EspaciosOcupados--
+	c.Estacionamiento.EspaciosDisponibles++
+
+	fmt.Println("Espacios Ocupados: ", c.Estacionamiento.EspaciosOcupados)
+	fmt.Println("Espacios Disponibles: ", c.Estacionamiento.EspaciosDisponibles)
+
+	// c.Estacionamiento.EspacioLiberado <- struct{}{}
+
+	// c.Estacionamiento.ReanudarGeneracion <- struct{}{}
+
+	// c.Estacionamiento.M.Unlock()
+}
+
+func (c *Carro) esperarEspacioDisponible() {
+	fmt.Println("Carro", c.I, "esperando por un espacio disponible.")
+	time.Sleep(time.Duration(4 * time.Second))
+}
